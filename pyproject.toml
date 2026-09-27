@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfy-preflight"
+version = "0.1.0"
+description = "Static pre-flight checker for ComfyUI workflows: missing nodes, required models, rough VRAM feasibility - before installing anything."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+keywords = ["comfyui", "stable-diffusion", "vram", "workflow", "checker"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics",
+]
+
+[project.scripts]
+comfy-preflight = "comfy_preflight:main"
+
+[tool.setuptools]
+py-modules = ["comfy_preflight"]
