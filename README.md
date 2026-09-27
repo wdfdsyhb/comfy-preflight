@@ -102,8 +102,8 @@ order-of-magnitude guidance.
   "missing" report for a brand-new core node is possible (it will say so).
 - Registry lookups are keyword search, so the suggested pack is a *candidate*,
   not gospel. The curated map (top ~35 packs) is authoritative where it hits.
-- Estimation covers txt2img-class graphs; multi-pass (hires-fix, detailer
-  chains) currently counts the largest single pass.
+- Estimation covers txt2img-class graphs; when several checkpoint/unet
+  loaders exist, the estimate keys off the first one found.
 
 ## Community benchmarks
 

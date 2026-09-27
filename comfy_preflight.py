@@ -188,12 +188,18 @@ SLOT_DIRS = {
     "control_net_name": "controlnet",
     "control_net": "controlnet",
     "model_name": "upscale_models",
+    "clip_vision_name": "clip_vision",
     "clip_vision": "clip_vision",
     "style_model_name": "style_models",
     "gligen_name": "gligen",
     "ipadapter": "ipadapter",
     "instantid": "instantid",
     "insightface": "insightface",
+}
+# per-class slot overrides: loaders whose canonical folder differs from
+# what the slot/input name alone suggests
+CLASS_SLOT_DIRS = {
+    "CLIPVisionLoader": {"clip_name": "clip_vision"},
 }
 # loader class -> ordered widget slot names (UI format widgets_values)
 WIDGET_MAP = {
@@ -209,7 +215,7 @@ WIDGET_MAP = {
     "DualCLIPLoader": ["clip_name1", "clip_name2", "type"],
     "TripleCLIPLoader": ["clip_name1", "clip_name2", "clip_name3"],
     "QuadrupleCLIPLoader": ["clip_name1", "clip_name2", "clip_name3", "clip_name4"],
-    "CLIPVisionLoader": ["clip_name"],
+    "CLIPVisionLoader": ["clip_vision_name"],
     "StyleModelLoader": ["style_model_name"],
     "UpscaleModelLoader": ["model_name"],
     "ControlNetLoader": ["control_net_name"],
@@ -269,12 +275,17 @@ def quant_factor(name):
 
 
 def parse_workflow(path):
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise SystemExit("error: invalid workflow JSON: %s" % e)
     nodes = []  # {class_type, widgets(list), inputs(dict), disabled(bool)}
     if isinstance(data, dict) and isinstance(data.get("nodes"), list):
         fmt = "ui"
         for n in data["nodes"]:
+            if not isinstance(n, dict):
+                continue
             nodes.append({
                 "class_type": n.get("type", "?"),
                 "widgets": n.get("widgets_values") or [],
@@ -300,55 +311,71 @@ def parse_workflow(path):
 
 def extract_models(nodes):
     """Return models [(filename, folder)], loras count, latent dict, dtype hint."""
-    models, loras, latent = [], 0, None
+    models, latent = [], None
     dtype_hint = ""
-    seen = set()
+    seen = set()          # unique (fname, folder) pairs
+    lora_files = set()    # unique lora filenames: count each file once
 
     def add(fname, folder):
-        """Returns True if fname counts as a lora."""
-        is_lora = False
-        if fname and str(fname).lower().endswith(MODEL_EXTS):
-            key = (fname, folder)
-            if key not in seen:
-                seen.add(key)
-                models.append(key)
-            is_lora = (folder == "loras") or ("lora" in str(fname).lower())
-        return is_lora
+        fname = str(fname)
+        if not fname or not fname.lower().endswith(MODEL_EXTS):
+            return
+        key = (fname, folder)
+        if key not in seen:
+            seen.add(key)
+            models.append(key)
+        if folder == "loras" or "lora" in fname.lower():
+            lora_files.add(fname)
+
+    def slot_dir(cls, slot):
+        return CLASS_SLOT_DIRS.get(cls, {}).get(slot, SLOT_DIRS.get(slot, "unknown"))
+
+    def set_latent(key, val):
+        nonlocal latent
+        if latent is None:
+            latent = {"width": 1024, "height": 1024, "batch": 1}
+        latent[key] = int(val)
 
     for n in nodes:
         if n["disabled"]:
             continue
         cls, widgets, inputs = n["class_type"], n["widgets"], n["inputs"]
         slots = WIDGET_MAP.get(cls)
-        if slots:  # UI format: positional widgets
+        if isinstance(widgets, dict):
+            # newer frontend exports: widgets_values is an object keyed by slot
+            for key, val in widgets.items():
+                if isinstance(val, str):
+                    if key == "weight_dtype" and val not in ("default", "disabled"):
+                        dtype_hint = val
+                    add(val, slot_dir(cls, key))
+                elif key in ("width", "height", "batch") and isinstance(val, (int, float)):
+                    set_latent(key, val)
+        elif slots:  # UI format: positional widgets
             for slot, val in zip(slots, widgets):
-                if not isinstance(val, str):
-                    if slot in ("width", "height", "batch") and isinstance(val, (int, float)):
-                        if latent is None:
-                            latent = {"width": 1024, "height": 1024, "batch": 1}
-                        latent[slot] = int(val)
-                    continue
-                if slot == "weight_dtype" and val not in ("default", "disabled"):
-                    dtype_hint = val
-                if add(val, SLOT_DIRS.get(slot, "unknown")):
-                    loras += 1
-        # API format / generic: scan named inputs
+                if isinstance(val, str):
+                    if slot == "weight_dtype" and val not in ("default", "disabled"):
+                        dtype_hint = val
+                    add(val, slot_dir(cls, slot))
+                elif slot in ("width", "height", "batch") and isinstance(val, (int, float)):
+                    set_latent(slot, val)
+        # API format: named inputs
         for key, val in inputs.items():
             if key == "weight_dtype" and isinstance(val, str) and val not in ("default", "disabled"):
                 dtype_hint = val
                 continue
             if isinstance(val, str) and val.lower().endswith(MODEL_EXTS):
-                if add(val, SLOT_DIRS.get(key, "unknown")):
-                    loras += 1
-        # heuristic for unknown UI nodes: any string widget that looks like a file
-        if slots is None:
+                add(val, slot_dir(cls, key))
+            elif (cls in LATENT_CLASSES and key in ("width", "height", "batch")
+                  and isinstance(val, (int, float))):
+                set_latent(key, val)
+        # heuristic for unknown UI nodes: string widgets that look like files
+        if slots is None and not isinstance(widgets, dict):
             for val in widgets:
                 if isinstance(val, str) and val.lower().endswith(MODEL_EXTS):
-                    if add(val, "unknown"):
-                        loras += 1
+                    add(val, "unknown")
     if latent is None:
         latent = {"width": 1024, "height": 1024, "batch": 1}
-    return models, loras, latent, dtype_hint
+    return models, len(lora_files), latent, dtype_hint
 
 
 def pack_installed(scan, info):
@@ -382,18 +409,23 @@ def find_missing(nodes, offline, scan=None):
 
 
 _registry_cache = {}
+_registry_dead = False  # set after one network failure; skip further lookups
 
 
 def registry_lookup(class_name):
     """Query the ComfyUI Registry for a pack matching this node class name.
 
     Hardened: class name is allowlisted, URL is pinned to the registry host,
-    and no redirects are followed.
+    and no redirects are followed. After the first network failure the
+    registry is considered down and remaining lookups short-circuit.
     """
+    global _registry_dead
     if class_name in _registry_cache:
         return _registry_cache[class_name]
     info = None
-    if not _CLASS_NAME_RE.match(class_name):
+    if _registry_dead:
+        info = ("unresolved (registry unreachable)", "")
+    elif not _CLASS_NAME_RE.match(class_name):
         info = ("unresolved (unusual node name)", "")
     else:
         url = REGISTRY_HOST + "/nodes/search?query=" + urllib.parse.quote(class_name, safe="")
@@ -416,7 +448,8 @@ def registry_lookup(class_name):
                     repo = (top.get("publisher") or {}).get("source_code_repo") or top.get("repository") or ""
                     info = (top.get("name", "?"), repo)
             except Exception:
-                info = ("unresolved (registry unreachable?)", "")
+                _registry_dead = True
+                info = ("unresolved (registry unreachable)", "")
     _registry_cache[class_name] = info
     return info
 
@@ -432,11 +465,16 @@ def estimate_vram(nodes, models, loras, latent, family_override=None, dtype_hint
                 loader_files.append(fname)
     if not loader_files:
         # text-encoder-only or loader-less workflow: treat as tiny
+        notes = ["No checkpoint or unet loader detected - estimate may be meaningless."]
+        if family_override:
+            notes.append("--family %s ignored: no checkpoint/unet loader in this workflow."
+                         % family_override)
         return {"family": "unknown", "label": "no checkpoint/unet found",
                 "weights": 0.0, "act": 0.0, "low": 0.5, "high": 1.0,
-                "notes": ["No checkpoint or unet loader detected - estimate may be meaningless."]}
-    fam_key = family_override or detect_family(loader_files) or "sdxl"
-    if family_override is None and detect_family(loader_files) is None:
+                "notes": notes}
+    detected = detect_family(loader_files)
+    fam_key = family_override or detected or "sdxl"
+    if family_override is None and detected is None:
         notes.append("Family unrecognized; assuming SDXL-class weights. Pass --family to override.")
     fam = FAMILIES[fam_key]
     main_file = loader_files[0]
@@ -461,7 +499,9 @@ def estimate_vram(nodes, models, loras, latent, family_override=None, dtype_hint
             weights += 1.7
         weights += 0.3  # vae
     if loras:
-        notes.append("%d LoRA(s): +%.1f GB." % (loras, loras * fam["lora"]))
+        lora_gb = loras * fam["lora"]
+        weights += lora_gb
+        notes.append("%d LoRA(s): +%.1f GB (included in weights)." % (loras, lora_gb))
     dw, dh = fam["res"]
     w, h, batch = latent["width"], latent["height"], latent["batch"]
     act = fam["act"] * ((w * h) / (dw * dh)) ** 1.5 * batch
@@ -638,6 +678,8 @@ def main(argv=None):
                     help="local ComfyUI dir: check models present and packs installed")
     ap.add_argument("--version", action="version", version="comfy-preflight " + __version__)
     args = ap.parse_args(argv)
+    if args.vram <= 0:
+        ap.error("--vram must be a positive number of GB")
 
     workflow = resolve_read_path(args.workflow)
     if not os.path.isfile(workflow):
