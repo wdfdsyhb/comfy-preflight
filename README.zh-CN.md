@@ -11,10 +11,12 @@ ComfyUI，就能告诉你一个 workflow.json——
 
 ```bash
 python comfy_preflight.py workflow.json --vram 6        # 6GB 卡
+python comfy_preflight.py workflow.json --comfyui D:/Apps/ComfyUI/ComfyUI
 python comfy_preflight.py workflow.json --markdown > report.md
 ```
 
 - 支持两种格式：UI 格式（画布"保存"的 json）和 API 格式（"Save (API Format)"）
+- `--comfyui PATH` 指向本地安装：报告每个模型文件 present/MISSING、每个包是否已装，末尾一行 READY 摘要
 - `--offline` 跳过在线查询；`--family sdxl|flux|...` 手动指定模型家族
 - 单文件、纯标准库，Python ≥ 3.9，无需安装
 

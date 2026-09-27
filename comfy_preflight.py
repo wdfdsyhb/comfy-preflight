@@ -37,14 +37,58 @@ MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".sft")
 
 
 def resolve_read_path(path):
-    """Resolve the workflow path to read; reject parent-dir segments outright."""
+    """Resolve a filesystem path to read; reject parent-dir segments outright."""
     raw_segs = str(path).replace("\\", "/").split("/")
     if os.path.pardir in raw_segs:
-        raise SystemExit("error: workflow path must not contain parent-dir segments")
+        raise SystemExit("error: path must not contain parent-dir segments")
     resolved = os.path.realpath(os.path.abspath(path))
-    if not os.path.isfile(resolved):
-        raise SystemExit("error: workflow file not found: %s" % path)
     return resolved
+
+
+def norm_name(s):
+    """Normalize a pack name for fuzzy matching (case/punct-insensitive)."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def scan_comfyui(path):
+    """Index a local ComfyUI install: model files and installed custom packs.
+
+    Accepts either the inner ComfyUI dir (containing models/ and
+    custom_nodes/) or its parent; returns dict with a models index
+    (lowercased basename -> full path) and the installed pack names.
+    """
+    root = path
+    if not os.path.isdir(os.path.join(root, "models")):
+        nested = os.path.join(root, "ComfyUI")
+        if os.path.isdir(os.path.join(nested, "models")):
+            root = nested
+        else:
+            raise SystemExit("error: no models/ directory under %s (pass the ComfyUI dir)" % path)
+    models_dir = os.path.join(root, "models")
+    index = {}
+    for dirpath, _dirnames, filenames in os.walk(models_dir):
+        for fn in filenames:
+            index.setdefault(fn.lower(), os.path.join(dirpath, fn))
+    packs = []
+    cn_dir = os.path.join(root, "custom_nodes")
+    if os.path.isdir(cn_dir):
+        for entry in os.listdir(cn_dir):
+            if entry.startswith("__") or entry == "example_node.py.example":
+                continue
+            packs.append(entry)
+    return {
+        "root": root,
+        "models": index,
+        "packs_raw": packs,
+        "packs": {norm_name(p) for p in packs},
+    }
+
+
+def model_present(scan, folder, fname):
+    """Check a required model file against a scanned install."""
+    if scan is None:
+        return None
+    return scan["models"].get(fname.lower())
 
 
 # --- Which core (built-in) ComfyUI nodes exist. Anything not listed here and
@@ -307,8 +351,20 @@ def extract_models(nodes):
     return models, loras, latent, dtype_hint
 
 
-def find_missing(nodes, offline):
-    """Return list of (class_name, pack_info_or_None) for non-core nodes."""
+def pack_installed(scan, info):
+    """True if the pack (by name or repo slug tail) exists in custom_nodes/."""
+    if scan is None or not info:
+        return False
+    pack_name, repo = info
+    candidates = [norm_name(pack_name)]
+    tail = repo.rstrip("/").split("/")[-1] if repo else ""
+    if tail:
+        candidates.append(norm_name(tail))
+    return any(c and c in scan["packs"] for c in candidates)
+
+
+def find_missing(nodes, offline, scan=None):
+    """Return list of (class_name, pack_info_or_None, installed) for non-core nodes."""
     missing = []
     seen = set()
     for n in nodes:
@@ -321,7 +377,7 @@ def find_missing(nodes, offline):
         info = PACK_MAP.get(cls)
         if info is None and not offline:
             info = registry_lookup(cls)
-        missing.append((cls, info))
+        missing.append((cls, info, pack_installed(scan, info)))
     return missing
 
 
@@ -436,7 +492,7 @@ def verdict(est, vram):
     return "MAYBE", "Above comfortable headroom for %.1f GB; risky." % vram, tips
 
 
-def fmt_report(path, fmt, nodes, missing, models, est, vd, vram, latent):
+def fmt_report(path, fmt, nodes, missing, models, est, vd, vram, latent, scan=None, model_status=None):
     badge = {"OK": "[OK]", "TIGHT": "[TIGHT]", "MAYBE": "[MAYBE]", "NO": "[NO]"}[vd[0]]
     lines = []
     lines.append("# comfy-preflight report")
@@ -444,6 +500,9 @@ def fmt_report(path, fmt, nodes, missing, models, est, vd, vram, latent):
     lines.append("- Workflow: `%s` (%s format, %d active nodes)" % (
         path, fmt, len([n for n in nodes if not n["disabled"]])))
     lines.append("- Target VRAM: %.1f GB" % vram)
+    if scan:
+        lines.append("- ComfyUI install: `%s` (%d custom packs, %d model files)" % (
+            scan["root"], len(scan["packs_raw"]), len(scan["models"])))
     lines.append("")
     lines.append("## Verdict: %s %s" % (badge, vd[0]))
     lines.append("")
@@ -468,37 +527,58 @@ def fmt_report(path, fmt, nodes, missing, models, est, vd, vram, latent):
     lines.append("## Missing nodes (%d)" % len(missing))
     lines.append("")
     if missing:
-        lines.append("| Node class | Likely pack | Source |")
-        lines.append("|---|---|---|")
-        for cls, info in missing:
+        lines.append("| Node class | Likely pack | Source | Status |")
+        lines.append("|---|---|---|---|")
+        for cls, info, installed in missing:
+            status = "installed" if installed else ("NOT installed" if scan else "-")
             if info:
-                lines.append("| `%s` | %s | %s |" % (cls, info[0], info[1] or "-"))
+                lines.append("| `%s` | %s | %s | %s |" % (cls, info[0], info[1] or "-", status))
             else:
-                lines.append("| `%s` | core? (not in bundled list; may be a newer core node) | - |" % cls)
+                lines.append("| `%s` | core? (not in bundled list; may be a newer core node) | - | %s |" % (cls, status))
     else:
         lines.append("None - all node classes are known core nodes.")
     lines.append("")
     lines.append("## Models required (%d)" % len(models))
     lines.append("")
     if models:
-        lines.append("| File | Folder under ComfyUI/models/ |")
-        lines.append("|---|---|")
-        for fname, folder in models:
-            lines.append("| `%s` | %s |" % (fname, folder))
+        if scan:
+            lines.append("| File | Folder under ComfyUI/models/ | Status |")
+            lines.append("|---|---|---|")
+            for fname, folder in models:
+                loc = model_status.get(fname)
+                if loc:
+                    lines.append("| `%s` | %s | present |" % (fname, folder))
+                else:
+                    lines.append("| `%s` | %s | **MISSING** |" % (fname, folder))
+        else:
+            lines.append("| File | Folder under ComfyUI/models/ |")
+            lines.append("|---|---|")
+            for fname, folder in models:
+                lines.append("| `%s` | %s |" % (fname, folder))
     else:
         lines.append("None detected.")
     lines.append("")
+    if scan:
+        n_miss = sum(1 for f, _ in models if not model_status.get(f))
+        lines.append("**Readiness:** %d of %d model files present; %d of %d required node packs missing."
+                     % (len(models) - n_miss, len(models),
+                        sum(1 for _, info, inst in missing if info and not inst),
+                        sum(1 for _, info, _ in missing if info)))
+        lines.append("")
     lines.append("---")
     lines.append("*Estimates are heuristics, not benchmarks. Actual usage depends on "
                  "ComfyUI version, attention backend and offload behavior.*")
     return "\n".join(lines)
 
 
-def report_text(path, fmt, nodes, missing, models, est, vd, vram, latent):
+def report_text(path, fmt, nodes, missing, models, est, vd, vram, latent, scan=None, model_status=None):
     out = []
     out.append("comfy-preflight %s - %s" % (__version__, os.path.basename(path)))
     out.append("format=%s  active_nodes=%d  target_vram=%.1fGB" % (
         fmt, len([n for n in nodes if not n["disabled"]]), vram))
+    if scan:
+        out.append("comfyui: %s  (%d custom packs, %d model files)" % (
+            scan["root"], len(scan["packs_raw"]), len(scan["models"])))
     out.append("")
     out.append("VERDICT: %-6s %s" % (vd[0], vd[1]))
     out.append("VRAM est: %.1f - %.1f GB (weights %.1f + act %.1f @ %dx%d x%d)  family=%s" % (
@@ -512,9 +592,12 @@ def report_text(path, fmt, nodes, missing, models, est, vd, vram, latent):
     out.append("Missing nodes (%d):" % len(missing))
     if not missing:
         out.append("  none")
-    for cls, info in missing:
+    for cls, info, installed in missing:
         if info:
-            out.append("  - %-34s -> %s  (%s)" % (cls, info[0], info[1] or "repo n/a"))
+            tag = ""
+            if scan:
+                tag = "  [pack installed]" if installed else "  [pack NOT installed]"
+            out.append("  - %-34s -> %s  (%s)%s" % (cls, info[0], info[1] or "repo n/a", tag))
         else:
             out.append("  - %-34s -> unknown (not core, not in curated map)" % cls)
     out.append("")
@@ -522,7 +605,18 @@ def report_text(path, fmt, nodes, missing, models, est, vd, vram, latent):
     if not models:
         out.append("  none")
     for fname, folder in models:
-        out.append("  - %-46s -> models/%s" % (fname, folder))
+        loc = model_status.get(fname) if model_status else None
+        if scan:
+            tag = "present" if loc else "MISSING"
+            out.append("  - %-46s -> models/%-18s [%s]" % (fname, folder, tag))
+        else:
+            out.append("  - %-46s -> models/%s" % (fname, folder))
+    if scan:
+        n_miss = sum(1 for f, _ in models if not model_status.get(f))
+        n_pack = sum(1 for _, info, inst in missing if info and not inst)
+        out.append("")
+        out.append("READY: %d/%d models present, %d pack(s) to install."
+                   % (len(models) - n_miss, len(models), n_pack))
     return "\n".join(out)
 
 
@@ -540,21 +634,32 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true",
                     help="skip ComfyUI Registry API lookups")
     ap.add_argument("--markdown", action="store_true", help="emit markdown report")
+    ap.add_argument("--comfyui", metavar="PATH", default=None,
+                    help="local ComfyUI dir: check models present and packs installed")
     ap.add_argument("--version", action="version", version="comfy-preflight " + __version__)
     args = ap.parse_args(argv)
 
     workflow = resolve_read_path(args.workflow)
+    if not os.path.isfile(workflow):
+        raise SystemExit("error: workflow file not found: %s" % args.workflow)
+    scan = None
+    if args.comfyui:
+        scan = scan_comfyui(resolve_read_path(args.comfyui))
     fmt, nodes = parse_workflow(workflow)
     models, loras, latent, dtype_hint = extract_models(nodes)
-    missing = find_missing(nodes, args.offline)
+    missing = find_missing(nodes, args.offline, scan)
     est = estimate_vram(nodes, models, loras, latent,
                         family_override=args.family, dtype_hint=dtype_hint)
     vd = verdict(est, args.vram)
+    model_status = {fname: model_present(scan, folder, fname)
+                    for fname, folder in models} if scan else {}
 
     if args.markdown:
-        print(fmt_report(args.workflow, fmt, nodes, missing, models, est, vd, args.vram, latent))
+        print(fmt_report(args.workflow, fmt, nodes, missing, models, est, vd,
+                         args.vram, latent, scan, model_status))
     else:
-        print(report_text(args.workflow, fmt, nodes, missing, models, est, vd, args.vram, latent))
+        print(report_text(args.workflow, fmt, nodes, missing, models, est, vd,
+                          args.vram, latent, scan, model_status))
     return 0 if vd[0] != "NO" else 1
 
 

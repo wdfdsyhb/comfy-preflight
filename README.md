@@ -38,6 +38,7 @@ Models required (4):
 | Workflow format | Both UI format (saved from the ComfyUI canvas) and API format |
 | Missing nodes | Bundled core-node list + curated map of popular packs; unknown classes are looked up in the [ComfyUI Registry API](https://api.comfy.org) (offline mode: `--offline`) |
 | Required models | Loader widgets/inputs parsed by slot name; each file mapped to its folder under `ComfyUI/models/` |
+| Local install check | With `--comfyui PATH`: model files present/MISSING, custom packs installed or not (fuzzy name match) |
 | VRAM estimate | Model family (SD1.5 / SDXL / SD3.5 / FLUX / Qwen-Image) + quantization (GGUF, fp8, NF4 — from filename or loader `weight_dtype`) + latent size/batch + LoRA count |
 | Verdict | OK / TIGHT / MAYBE / NO against your `--vram` budget, with actionable tips |
 
@@ -49,7 +50,19 @@ you can sanity-check it instead of trusting a black box.
 No install needed — single file, Python 3.9+, stdlib only:
 
 ```bash
-python comfy_preflight.py <workflow.json> [--vram 6] [--markdown] [--offline] [--family sdxl]
+python comfy_preflight.py <workflow.json> [--vram 6] [--comfyui PATH] [--markdown] [--offline] [--family sdxl]
+```
+
+Point `--comfyui` at your local ComfyUI directory (the one containing
+`models/` and `custom_nodes/`, or its parent) and the report gains a
+present/MISSING status per model file and an installed flag per required
+pack, ending in a one-line readiness summary:
+
+```
+Models required (1):
+  - flanimeIllustriousXL_altStyle.safetensors      -> models/checkpoints        [MISSING]
+
+READY: 0/1 models present, 0 pack(s) to install.
 ```
 
 Or via pip:
@@ -94,7 +107,7 @@ order-of-magnitude guidance.
 
 ## Roadmap
 
-- [ ] `--comfyui PATH`: diff against a real ComfyUI install (installed packs, actual model files present)
+- [x] `--comfyui PATH`: diff against a real ComfyUI install (installed packs, actual model files present)
 - [ ] Multi-pass graphs (hires-fix, upscale chains) as combined peak estimate
 - [ ] Community-calibrated activation table (contributions welcome)
 - [ ] Batch mode: scan a folder of workflow JSONs
