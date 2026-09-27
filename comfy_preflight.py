@@ -201,7 +201,9 @@ def detect_family(names):
         return "qwen"
     if "sd3" in joined or "sd_3" in joined:
         return "sd35l" if "large" in joined else "sd35m"
-    if "sdxl" in joined or "sd_xl" in joined or "xl_base" in joined or "playground" in joined:
+    if ("sdxl" in joined or "sd_xl" in joined or "playground" in joined
+            or re.search(r"illustrious|noobai|pony", joined)
+            or re.search(r"\bxl\b", joined)):
         return "sdxl"
     if "sd15" in joined or "v1-5" in joined or "sd_v1" in joined or "1.5" in joined:
         return "sd15"
