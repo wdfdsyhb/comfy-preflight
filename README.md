@@ -105,11 +105,19 @@ order-of-magnitude guidance.
 - Estimation covers txt2img-class graphs; multi-pass (hires-fix, detailer
   chains) currently counts the largest single pass.
 
+## Community benchmarks
+
+`benchmarks/data.json` collects real measured peak-VRAM numbers so the
+estimates can be calibrated against reality over time. Contribute a
+measurement with a PR (see [benchmarks/README.md](benchmarks/README.md));
+`python benchmarks/validate.py` checks the format.
+
 ## Roadmap
 
 - [x] `--comfyui PATH`: diff against a real ComfyUI install (installed packs, actual model files present)
+- [x] Community VRAM benchmark collection (`benchmarks/`)
 - [ ] Multi-pass graphs (hires-fix, upscale chains) as combined peak estimate
-- [ ] Community-calibrated activation table (contributions welcome)
+- [ ] Auto-calibrate FAMILIES table from benchmarks once enough entries land
 - [ ] Batch mode: scan a folder of workflow JSONs
 
 ## License

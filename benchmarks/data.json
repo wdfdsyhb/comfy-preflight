@@ -1,0 +1,4 @@
+{
+  "_comment": "Community-measured peak VRAM for ComfyUI workflows. Add entries via PR; validate with: python benchmarks/validate.py",
+  "entries": []
+}
