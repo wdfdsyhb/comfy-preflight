@@ -1,6 +1,6 @@
 # comfy-preflight · ComfyUI Workflow Pre-flight
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/wdfdsyhb/comfy-preflight/actions/workflows/tests.yml/badge.svg)](https://github.com/wdfdsyhb/comfy-preflight/actions/workflows/tests.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 
 > Run one command on a downloaded ComfyUI workflow to find missing nodes, missing models, and whether it fits your VRAM — with nothing installed and ComfyUI never launched.
