@@ -1,6 +1,6 @@
 # comfy-preflight · ComfyUI 工作流预检器
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/wdfdsyhb/comfy-preflight/actions/workflows/tests.yml/badge.svg)](https://github.com/wdfdsyhb/comfy-preflight/actions/workflows/tests.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 
 > 从 Civitai 下载的工作流先别急着跑：一条命令查清缺哪些节点、缺哪些模型、显存够不够——不装任何东西，也不启动 ComfyUI。
