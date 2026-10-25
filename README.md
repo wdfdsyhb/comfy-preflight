@@ -1,8 +1,11 @@
-# comfy-preflight
+# comfy-preflight · ComfyUI 工作流预检器
 
-**Know before you load.** A static pre-flight checker for ComfyUI workflows:
-find missing custom nodes, required model files, and whether the whole thing
-fits in your VRAM — *without installing anything or launching ComfyUI*.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
+
+> 从 Civitai 下载的工作流先别急着跑：一条命令查清缺哪些节点、缺哪些模型、显存够不够——不装任何东西，也不启动 ComfyUI。
+>
+> English: Run one command on a downloaded ComfyUI workflow to find missing nodes, missing models, and whether it fits your VRAM — with nothing installed and ComfyUI never launched.
 
 You downloaded a 40-node workflow JSON from Civitai. You have a 6 GB GPU.
 Instead of installing four node packs, downloading 15 GB of models and then
@@ -123,3 +126,9 @@ measurement with a PR (see [benchmarks/README.md](benchmarks/README.md));
 ## License
 
 MIT
+
+---
+
+## English
+
+Full English documentation: [README_EN.md](README_EN.md)
